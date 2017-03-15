@@ -27,6 +27,7 @@ COMMAND_TYPE_WRITE  =  4
 SERIAL_TIMEOUT = 3.0
 
 READ_WRITE_CHUNK_SIZE = 1016
+SYNCHRONIZE_WRITE_SIZE = 2 * READ_WRITE_CHUNK_SIZE
 
 SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 
@@ -104,6 +105,26 @@ def packet_read(serial_connection):
     return command_type, payload
 
 
+def synchronize_with_device(serial_connection):
+    """Synchronize using ping/pong messages.
+
+    """
+
+    # Send a bunch of data end any ongoing write command. The data
+    # should not include any valid type field.
+    serial_connection.write(SYNCHRONIZE_WRITE_SIZE * b'\x00')
+
+    # Send a ping to check if we are synchronized with the device.
+    serial_connection.flushInput()
+    packet_write(serial_connection, COMMAND_TYPE_PING, b'')
+    response_command_type, _ = packet_read(serial_connection)
+
+    if response_command_type != COMMAND_TYPE_PING:
+        sys.exit('Failed to synchronize with device.')
+
+    print('info: synchronized with device')
+
+
 def execute_command(serial_connection, command_type, payload=None):
     """Execute given command and return the response payload.
 
@@ -118,6 +139,8 @@ def execute_command(serial_connection, command_type, payload=None):
 
         if response_command_type == command_type:
             return response_payload
+
+        synchronize_with_device(serial_connection)
 
     sys.exit('Communication failure.')
 
@@ -191,8 +214,6 @@ def upload(serial_connection, baudrate, control_port):
 
     print('Uploading {} to SRAM using the BAM.'.format(spc5tool_bin))
 
-    bytes_transferred = 0
-
     for byte in tqdm(payload, unit=' bytes'):
         serial_connection.write(byte)
         response_byte = serial_connection.read(1)
@@ -208,8 +229,6 @@ def upload(serial_connection, baudrate, control_port):
                   "expecting '{}'.".format(response_byte.encode('hex'),
                                            byte.encode('hex')))
             sys.exit(1)
-
-        bytes_transferred += 1
 
     # Give the uploaded application 10 ms to start.
     time.sleep(0.01)
